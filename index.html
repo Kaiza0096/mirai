@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>避難場所マップ - 徒歩ルート表示</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        #loading {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            z-index: 9999;
+            font-size: 20px;
+            color: #333;
+            text-align: center;
+            line-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <h1>避難場所マップ</h1>
+    <button id="nearest-btn">現在地から最寄りの避難場所まで徒歩ルートを表示</button>
+    <div id="map"></div>
+    <div id="loading">データ読み込み中...</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDVPTJmon-7A_dwNVf_okizMkzvB1CfeFI&libraries=geometry"></script>
+    
+    <script>
+
+        let map;
+        let directionsService;
+        let directionsRenderer;
+
+    
+        let shelters = []; 
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            loadShelterData();
+            document.getElementById('nearest-btn').addEventListener('click', findAndShowRoute);
+        });
+
+        function initMap() {
+    
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 35.68, lng: 139.76 }, 
+                zoom: 12
+            });
+
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer({
+                map: map,
+                suppressMarkers: false 
+            });
+        }
+
+       
+        function loadShelterData() {
+            const loadingElement = document.getElementById('loading');
+            loadingElement.style.display = 'block';
+
+            const csvFileUrl = 'shelters.csv'; 
+
+            Papa.parse(csvFileUrl, {
+                download: true,
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    shelters = results.data.map(row => ({
+                        name: row['施設名'],
+                        address: row['所在地住所'],
+                        lat: parseFloat(row['緯度']),
+                        lng: parseFloat(row['経度']),
+                        earthquake: row['地震'] === '1',
+                        flood: row['洪水'] === '1',
+                        barrierFree: row['エレベーター有避難スペースが１階'] === '○'
+                    }));
+
+                    displaySheltersOnMap();
+                    loadingElement.style.display = 'none';
+                },
+                error: function(err) {
+                    alert('避難場所データの読み込みに失敗しました: ' + err.message);
+                    loadingElement.style.display = 'none';
+                }
+            });
+        }
+
+       
+        function displaySheltersOnMap() {
+            shelters.forEach(shelter => {
+                if (shelter.lat && shelter.lng) {
+                    const marker = new google.maps.Marker({
+                        position: { lat: shelter.lat, lng: shelter.lng },
+                        map: map,
+                        title: shelter.name
+                    });
+
+                    const infoWindow = new google.maps.InfoWindow({
+                        content: `
+                            <strong>${shelter.name}</strong><br>
+                            ${shelter.address}<br>
+                            地震対応: ${shelter.earthquake ? 'あり' : 'なし'}<br>
+                            洪水対応: ${shelter.flood ? 'あり' : 'なし'}<br>
+                            バリアフリー: ${shelter.barrierFree ? '対応' : '非対応'}
+                        `
+                    });
+
+                    marker.addListener('click', () => {
+                        infoWindow.open(map, marker);
+                    });
+                }
+            });
+        }
+
+        
+        function findAndShowRoute() {
+            if (!navigator.geolocation) {
+                alert("Geolocationがサポートされていません。");
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(position => {
+                const currentLat = position.coords.latitude;
+                const currentLng = position.coords.longitude;
+
+                const currentLocation = new google.maps.LatLng(currentLat, currentLng);
+
+                let nearestShelter = null;
+                let minDistance = Infinity;
+
+                // 最寄りの避難所を特定
+                shelters.forEach(shelter => {
+                    const shelterLocation = new google.maps.LatLng(shelter.lat, shelter.lng);
+                    const distance = google.maps.geometry.spherical.computeDistanceBetween(currentLocation, shelterLocation);
+
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        nearestShelter = shelter;
+                    }
+                });
+
+                if (nearestShelter) {
+                    const destinationLocation = new google.maps.LatLng(nearestShelter.lat, nearestShelter.lng);
+
+                    
+                    directionsService.route(
+                        {
+                            origin: currentLocation,
+                            destination: destinationLocation,
+                            travelMode: google.maps.TravelMode.WALKING 
+                        },
+                        (result, status) => {
+                            if (status === 'OK') {
+                                directionsRenderer.setDirections(result);
+                                alert(
+                                    `最寄りの避難場所: ${nearestShelter.name}\n距離: ${(minDistance / 1000).toFixed(2)} km`
+                                );
+                            } else {
+                                alert(`徒歩ルートを計算できませんでした: ${status}`);
+                            }
+                        }
+                    );
+
+                    
+                    new google.maps.Marker({
+                        position: currentLocation,
+                        map: map,
+                        title: "あなたの現在地",
+                        icon: {
+                            url: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+                        }
+                    });
+                } else {
+                    alert('避難場所が見つかりません。');
+                }
+            }, error => {
+                alert(`現在地の取得に失敗しました: ${error.message}`);
+            });
+        }
+    </script>
+</body>
+</html>
